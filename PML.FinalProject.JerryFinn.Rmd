@@ -1,0 +1,214 @@
+---
+title: "Practical Machine Learning Final Assignment"
+author: "Jerry Finn"
+date: "January 2018"
+output: html_document
+---
+
+```{r, message = F, warning = F}
+library(caret)
+library(kernlab)
+library(dplyr)
+library(kableExtra)
+library(rattle)
+```
+
+## Intro
+
+The intention of this investigation is to compare classification
+techniques and determine which has greater accuracy (smaller out 
+of sample error) without having excesive computations.
+
+## Data Processing
+
+### Importing the data
+
+The data set is rather sparce with regards to some features. Also we need to specify that blanks are NA. 
+
+```{r, message = F, warning = F}
+training <- read.csv("pml-training.csv", na.strings = c(NA, ""))
+testing <- read.csv("pml-testing.csv", na.strings = c(NA, ""))
+
+```
+
+To get rid of sparce features, we are going to remove columns with
+NA values. Many of these are aggregations of other values and don't 
+convey information. Also the first columns are just labels and not
+predictive, so we remove them. 
+
+```{r, message = F, warning = F}
+removecol <- colnames(training)[colSums(is.na(training)) > 0]
+reducetraining <- training[ , -which(names(training) %in% c(removecol))]
+reducetraining <- reducetraining[, -c(1,2,3,4,5,6,7)]
+
+```
+
+Here we'll split the data 70 to 30%, which according to our
+lectures are quite common.
+
+```{r, message = F, warning = F}
+keepcolumns = c(names(reducetraining))
+newtesting = testing[, keepcolumns[!keepcolumns %in% "classe"]]
+
+splitdf <- createDataPartition(reducetraining$classe, p=0.7, list=FALSE)
+traindf <- reducetraining[splitdf,]
+testdf <- reducetraining[-splitdf,]
+
+```
+
+
+```{r, eval=F, echo=F, message = F, warning = F}
+preProc = preProcess(traindf[, -ncol(traindf)], method="pca", pcaComp=10)
+trainPC = predict(preProc, traindf[, -ncol(traindf)])
+
+```
+  
+```{r, eval=F, echo=F, message = F, warning = F}
+featurePlot(x=traindf[, -ncol(traindf)], y=traindf$classe, plot ="pairs")
+```
+
+## Running the models and comparison
+
+### Model Selection  
+
+Tree algorithms are very popular for classification problems. We'll
+try 3. 1st, a single decision tree, the rpart method.  
+
+2nd, we'll use the Bagged CART method,
+which will resample cases and recalculate predictions, and then
+average on majority vote. Since this is a non-linear function it should perform well.  
+
+Finally we will use Random Forest, which is gained a reputation for accuracy (usually one of the two top performing algorithms) although it could be computationally expensive.
+
+We'll keep it simple and use a cross validation for all models.
+
+```{r, eval=F, message = F, warning = F}
+tc <- trainControl(method='cv', number = 3)
+
+modCart <- train(classe ~ ., data=traindf, trControl=tc,  method='rpart')
+
+modTb = train(classe ~ ., data = traindf, method="treebag")
+
+modRf <- train(classe ~ ., data=traindf, trControl=tc,   method='rf', ntree=100)
+
+```
+  
+```{r, eval=F, echo=F, message = F, warning = F}
+
+saveRDS(modCart, file = "m_cart.Rds")
+saveRDS(modRf, file = "m_rf.Rds")
+saveRDS(modTb, file = "m_treebag.Rds")
+
+```
+  
+```{r, echo=F, message = F, warning = F}
+modCart = readRDS("m_cart.Rds")
+modTb = readRDS("m_treebag.Rds")
+modRf = readRDS("m_rf.Rds")
+
+```
+
+### Confusion Matrix and Accuracy
+
+Now we'll use our test data for measuring accuracy. 
+
+```{r, message = F, warning = F}
+pCart <- predict(modCart, newdata=testdf)
+confusCart <- confusionMatrix(pCart, testdf$classe)
+pTb <- predict(modTb, newdata=testdf)
+confusTb <- confusionMatrix(pTb, testdf$classe)
+pRf <- predict(modRf, newdata=testdf)
+confusRf<- confusionMatrix(pRf, testdf$classe)
+
+```
+
+
+```{r, eval=F, echo=F, message = F, warning = F}
+# kable(dt, "html") %>% kable_styling(bootstrap_options = "striped", full_width = F, position = "float_right")
+#knitr::kable(list(t1, t2))
+```
+
+### Model Comparison
+
+#### CART Model  
+  
+```{r, message = F, warning = F}
+t1 <- confusCart$table 
+knitr::kable(t1) %>% kable_styling(position = "center")
+```  
+  
+Accuracy: `r confusCart$overall[1]`
+
+The model ran quickly and when I saved the model to a RDS file, it was 21MB. We can see from the output that the predictive power of this model is not good. Let's see why.
+  
+#### Decision Tree Graph  
+  
+```{r, message = F, warning = F}
+fancyRpartPlot(modCart$finalModel, caption = "Decision Tree")
+```
+
+We can see that the tree is skewed towards A. If we look at a 
+table of the classe variable we can see that A is more frequent 
+in the data. 
+
+
+```{r, message = F, warning = F}
+table(training$classe)
+```
+  
+So our out of sample error (mistakes on the test data set)
+could be determined if the test data is skewed differently from
+the training.
+  
+Therefore we need a more sophisticated model. 
+
+#### Tree Bagging
+  
+```{r, message = F, warning = F}
+t2 <- confusTb$table
+knitr::kable(t2)
+```  
+  
+Accuracy: `r confusTb$overall[1]`
+
+The tree bag method gave respectable accuracy, (and therefore a 
+lower out of sample error) but it took a long time to run and 
+when saved to a RDS file, the model was over 300MB 
+in size. It would be nice to have a accurate model that is less 
+expensive.
+
+#### Random Forest
+
+```{r, message = F, warning = F}
+t3 <- confusRf$table
+knitr::kable(t3)
+```  
+  
+Accuracy: `r confusRf$overall[1]`
+
+Now we have a high level of accuracy, the model ran quickly and only takes up 2MB on disk. 
+
+## Conclusion
+
+Therefore, lets use random forest for the final prediction for the quiz.
+
+```{r, message = F, warning = F}
+quiz= predict(modRf, newdata=newtesting)
+quiz
+```
+  
+I submitted this and got them all right.
+
+The CART model, while not computationally expensive, was not accurate.
+When I ran the models, the accuracy of the Tree Bagging
+mode and the Random Forest were very close but the Random Forest was 
+always very slightly better than Tree Bagging. However, the Random
+Forest model ran faster and when saved to disk in a RDS file it was
+about 100 times less disk space. Therefore, Random Forest gave us
+the best results at the lowest cost.
+
+
+
+
+
+  
